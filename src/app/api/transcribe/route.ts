@@ -52,6 +52,28 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, receipt: parsed.data });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+
+    // Common AWS credential failure modes during local dev (SSO/STS token expiry).
+    const lower = message.toLowerCase();
+    const isAuthExpired =
+      lower.includes("session has expired") ||
+      lower.includes("expiredtoken") ||
+      lower.includes("expired token") ||
+      lower.includes("invalidclienttokenid") ||
+      lower.includes("security token included in the request is expired") ||
+      lower.includes("please reauthenticate");
+
+    if (isAuthExpired) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "AWS credentials expired. Refresh them (e.g. `aws sso login --profile <profile>` or `aws login --profile <profile>`) and restart the dev server.",
+        },
+        { status: 401 },
+      );
+    }
+
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }

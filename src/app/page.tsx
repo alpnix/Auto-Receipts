@@ -209,7 +209,19 @@ export default function Home() {
                     aria-label="Delete"
                     type="button"
                   >
-                    🗑
+                    <svg
+                      className={styles.trashIcon}
+                      viewBox="0 0 24 24"
+                      width="18"
+                      height="18"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <path
+                        fill="currentColor"
+                        d="M9 3a1 1 0 0 0-1 1v1H5a1 1 0 1 0 0 2h1v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7h1a1 1 0 1 0 0-2h-3V4a1 1 0 0 0-1-1H9Zm1 2h4v0H10v0Zm-2 2h8v14H8V7Zm2 3a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0v-8a1 1 0 0 1 1-1Zm5 0a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0v-8a1 1 0 0 1 1-1Z"
+                      />
+                    </svg>
                   </button>
                   <div className={styles.badge} data-status={it.status}>
                     {it.status === "processing"

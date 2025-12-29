@@ -1,7 +1,8 @@
 export function buildReceiptPrompt() {
   return [
     "You are a careful OCR + information extraction system.",
-    "Given an image of a receipt or invoice, extract structured data as JSON ONLY.",
+    "Given an image of a receipt or invoice, first crop in the area of the receipt or invoice.", 
+    "Then, extract structured data as JSON ONLY.",
     "",
     "Rules:",
     "- Output MUST be a single valid JSON object (no markdown, no code fences, no commentary).",
