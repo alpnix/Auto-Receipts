@@ -1,0 +1,42 @@
+:root {
+  --bg0: #0b1020;
+  --bg1: #121a33;
+  --card: rgba(255, 255, 255, 0.06);
+  --cardBorder: rgba(255, 255, 255, 0.10);
+  --text: rgba(255, 255, 255, 0.92);
+  --muted: rgba(255, 255, 255, 0.70);
+  --danger: #ff5f5f;
+  --accent: #7c9cff;
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  color: var(--text);
+  background: radial-gradient(1200px 600px at 20% 20%, #1d2a5a 0%, transparent 60%),
+    radial-gradient(900px 500px at 80% 10%, #2b1d5a 0%, transparent 55%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
+    Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+html {
+  color-scheme: dark;
+}

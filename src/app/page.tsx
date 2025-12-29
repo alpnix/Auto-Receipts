@@ -1,0 +1,260 @@
+"use client";
+
+import styles from "./page.module.css";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { dbDelete, dbGetImage, dbListItems, dbPutImage, dbUpsertItem } from "@/lib/db";
+import type { StoredReceiptItem } from "@/lib/db";
+import { downloadCsv, downloadExcel } from "@/lib/exporters";
+
+type ApiOk = { ok: true; receipt: unknown };
+type ApiErr = { ok: false; error: string; details?: unknown };
+type ApiResp = ApiOk | ApiErr;
+
+type UiItem = StoredReceiptItem & { previewUrl?: string };
+
+export default function Home() {
+  const [items, setItems] = useState<UiItem[]>([]);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const exportableItems = useMemo(() => items.filter((i) => i.status === "done"), [items]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await dbListItems();
+        if (cancelled) return;
+        setItems(list);
+        setIsHydrated(true);
+      } catch (e) {
+        setPageError(e instanceof Error ? e.message : "Failed to load saved items");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load preview URLs (blobs) for any items missing one.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const missing = items.filter((i) => !i.previewUrl);
+      if (missing.length === 0) return;
+      const updates: Array<{ id: string; previewUrl: string }> = [];
+      for (const it of missing) {
+        const blob = await dbGetImage(it.id);
+        if (!blob) continue;
+        const url = URL.createObjectURL(blob);
+        updates.push({ id: it.id, previewUrl: url });
+      }
+      if (cancelled || updates.length === 0) return;
+      setItems((prev) =>
+        prev.map((p) => {
+          const u = updates.find((x) => x.id === p.id);
+          return u ? { ...p, previewUrl: u.previewUrl } : p;
+        }),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [items]);
+
+  async function transcribeOne(file: File) {
+    const id = crypto.randomUUID();
+    const createdAt = Date.now();
+    const base: StoredReceiptItem = {
+      id,
+      createdAt,
+      fileName: file.name,
+      mimeType: file.type || "image/*",
+      size: file.size,
+      status: "processing",
+    };
+
+    // Optimistic UI + persistence
+    const previewUrl = URL.createObjectURL(file);
+    setItems((prev) => [{ ...base, previewUrl }, ...prev]);
+    await dbPutImage(id, file);
+    await dbUpsertItem(base);
+
+    try {
+      const form = new FormData();
+      form.set("image", file);
+
+      const res = await fetch("/api/transcribe", { method: "POST", body: form });
+      const data = (await res.json()) as ApiResp;
+      if (!data.ok) throw new Error(data.error);
+      const updated: StoredReceiptItem = { ...base, status: "done", receipt: data.receipt };
+      setItems((prev) => prev.map((p) => (p.id === id ? { ...p, ...updated } : p)));
+      await dbUpsertItem(updated);
+    } catch (e) {
+      const updated: StoredReceiptItem = {
+        ...base,
+        status: "error",
+        error: e instanceof Error ? e.message : "Unknown error",
+      };
+      setItems((prev) => prev.map((p) => (p.id === id ? { ...p, ...updated } : p)));
+      await dbUpsertItem(updated);
+    }
+  }
+
+  async function onAddFiles(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
+    setPageError(null);
+    const files = Array.from(fileList).filter((f) => f.type?.startsWith("image/"));
+    if (files.length === 0) {
+      setPageError("Please choose an image file.");
+      return;
+    }
+    // Fire sequentially to avoid spiky Bedrock usage; can be parallelized later.
+    for (const f of files) {
+      // eslint-disable-next-line no-await-in-loop
+      await transcribeOne(f);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function onDelete(id: string) {
+    setItems((prev) => {
+      const victim = prev.find((p) => p.id === id);
+      if (victim?.previewUrl) URL.revokeObjectURL(victim.previewUrl);
+      return prev.filter((p) => p.id !== id);
+    });
+    await dbDelete(id);
+  }
+
+  return (
+    <div className={styles.page}>
+      <main className={styles.main}>
+        <header className={styles.header}>
+          <div>
+            <h1 className={styles.title}>Receipt Dashboard</h1>
+            <p className={styles.subtitle}>
+              Add receipt photos, see extracted fields instantly, delete what you don’t need, and
+              export whenever you’re ready.
+            </p>
+          </div>
+
+          <div className={styles.headerActions}>
+            <button
+              className={styles.secondaryButton}
+              onClick={() =>
+                downloadCsv(`receipts-${new Date().toISOString().slice(0, 10)}.csv`, exportableItems)
+              }
+              disabled={exportableItems.length === 0}
+              title={exportableItems.length === 0 ? "No completed receipts to export yet" : "Export CSV"}
+            >
+              Export CSV
+            </button>
+            <button
+              className={styles.secondaryButton}
+              onClick={() =>
+                downloadExcel(`receipts-${new Date().toISOString().slice(0, 10)}.xls`, exportableItems)
+              }
+              disabled={exportableItems.length === 0}
+              title={
+                exportableItems.length === 0 ? "No completed receipts to export yet" : "Export Excel"
+              }
+            >
+              Export Excel
+            </button>
+          </div>
+        </header>
+
+        {pageError ? <div className={styles.error}>{pageError}</div> : null}
+
+        <section className={styles.grid}>
+          <button
+            className={styles.addTile}
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Add receipt photos"
+          >
+            <div className={styles.plus}>+</div>
+            <div className={styles.addText}>Add photos</div>
+            <div className={styles.addSub}>PNG / JPEG / WebP</div>
+            <input
+              ref={fileInputRef}
+              className={styles.fileInput}
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={(e) => void onAddFiles(e.currentTarget.files)}
+            />
+          </button>
+
+          {items.map((it) => {
+            const merchant = (it.receipt as any)?.merchant?.name as string | undefined;
+            const total = (it.receipt as any)?.totals?.total as number | undefined;
+            const date = (it.receipt as any)?.transaction?.date as string | undefined;
+            const currency = (it.receipt as any)?.transaction?.currency as string | undefined;
+            const lineItems = (it.receipt as any)?.line_items as unknown[] | undefined;
+            const lineCount = Array.isArray(lineItems) ? lineItems.length : 0;
+            return (
+              <article key={it.id} className={styles.itemCard}>
+                <div className={styles.thumbWrap}>
+                  {it.previewUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img className={styles.thumb} src={it.previewUrl} alt={it.fileName} />
+                  ) : (
+                    <div className={styles.thumbPlaceholder} />
+                  )}
+                  <button
+                    className={styles.trash}
+                    onClick={() => void onDelete(it.id)}
+                    title="Delete"
+                    aria-label="Delete"
+                    type="button"
+                  >
+                    🗑
+                  </button>
+                  <div className={styles.badge} data-status={it.status}>
+                    {it.status === "processing"
+                      ? "Processing"
+                      : it.status === "done"
+                        ? "Done"
+                        : "Error"}
+                  </div>
+                </div>
+
+                <div className={styles.itemBody}>
+                  <div className={styles.itemTitle}>{merchant || it.fileName}</div>
+                  <div className={styles.itemMeta}>
+                    {date ? <span>{date}</span> : <span>{new Date(it.createdAt).toLocaleString()}</span>}
+                    <span>·</span>
+                    <span>{(it.size / 1024).toFixed(0)} KB</span>
+                    {it.status === "done" ? (
+                      <>
+                        <span>·</span>
+                        <span>
+                          {currency ? `${currency} ` : ""}
+                          {typeof total === "number" ? total.toFixed(2) : "—"}
+                        </span>
+                        <span>·</span>
+                        <span>{lineCount} items</span>
+                      </>
+                    ) : null}
+                  </div>
+
+                  {it.status === "error" ? <div className={styles.itemError}>{it.error}</div> : null}
+
+                  {it.status === "done" ? (
+                    <details className={styles.details}>
+                      <summary className={styles.summary}>Transcript JSON</summary>
+                      <pre className={styles.pre}>{JSON.stringify(it.receipt, null, 2)}</pre>
+                    </details>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+        </section>
+
+        {!isHydrated ? <div className={styles.hint}>Loading your saved receipts…</div> : null}
+      </main>
+    </div>
+  );
+}
