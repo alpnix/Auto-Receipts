@@ -35,6 +35,13 @@ export default function Home() {
 
   const exportableItems = useMemo(() => items.filter((i) => i.status === "done"), [items]);
 
+  const exportBaseName = useMemo(() => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = d.toLocaleString("en-US", { month: "long" });
+    return `Receipts - ${year} ${month}`;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -157,7 +164,7 @@ export default function Home() {
             <button
               className={styles.secondaryButton}
               onClick={() =>
-                downloadCsv(`receipts-${new Date().toISOString().slice(0, 10)}.csv`, exportableItems)
+                downloadCsv(`${exportBaseName}.csv`, exportableItems)
               }
               disabled={exportableItems.length === 0}
               title={exportableItems.length === 0 ? "No completed receipts to export yet" : "Export CSV"}
@@ -167,7 +174,10 @@ export default function Home() {
             <button
               className={styles.secondaryButton}
               onClick={() =>
-                downloadExcel(`receipts-${new Date().toISOString().slice(0, 10)}.xls`, exportableItems)
+                void downloadExcel(
+                  `${exportBaseName}.xlsx`,
+                  exportableItems,
+                )
               }
               disabled={exportableItems.length === 0}
               title={

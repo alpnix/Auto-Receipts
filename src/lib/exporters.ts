@@ -16,131 +16,80 @@ function formatIso(ts: number): string {
 }
 
 function asRecord(v: unknown): Record<string, unknown> | null {
-  return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
-function pick(obj: unknown, path: string): unknown {
-  const parts = path.split(".");
-  let cur: unknown = obj;
-  for (const p of parts) {
-    const rec = asRecord(cur);
-    if (!rec) return undefined;
-    cur = rec[p];
+function getKey(rec: Record<string, unknown> | null, ...keys: string[]): unknown {
+  if (!rec) return "";
+  for (const k of keys) {
+    const v = rec[k];
+    if (v !== undefined && v !== null && v !== "") return v;
   }
-  return cur;
+  return "";
 }
 
-function normalizeRate(rate: unknown): number | null {
-  if (typeof rate === "number" && Number.isFinite(rate)) return rate;
-  if (typeof rate !== "string") return null;
-  const s = rate.replace(/%/g, "").trim();
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
 }
 
-function rateLabel(rate: number): string {
-  const base = Number.isInteger(rate) ? String(rate) : String(rate).replace(".", ",");
-  return `KDV ${base}%`;
-}
+function normalizeDateDmy(input: unknown): string {
+  if (typeof input !== "string") return "";
+  const s = input.trim();
+  if (!s) return "";
 
-function getKdvRates(items: StoredReceiptItem[]): number[] {
-  const set = new Set<number>();
-  for (const it of items) {
-    const kdv = pick(it.receipt, "tax.kdv");
-    if (!Array.isArray(kdv)) continue;
-    for (const line of kdv) {
-      const r = normalizeRate(asRecord(line)?.rate_percent);
-      if (r === null) continue;
-      set.add(r);
-    }
-  }
-  return Array.from(set).sort((a, b) => a - b);
+  // Accept common receipt formats: DD-MM-YYYY, DD.MM.YYYY, DD/MM/YYYY, YYYY-MM-DD, etc.
+  const m = s.match(/(\d{1,4})\D+(\d{1,2})\D+(\d{1,4})/);
+  if (!m) return s;
+
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  const c = Number(m[3]);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) return s;
+
+  // Heuristic: if first part looks like year (>= 1900), treat as Y-M-D.
+  if (a >= 1900) return `${pad2(c)}/${pad2(b)}/${String(a)}`;
+
+  // Otherwise treat as D-M-Y (or D-M-YY).
+  const year = c < 100 ? 2000 + c : c;
+  return `${pad2(a)}/${pad2(b)}/${String(year)}`;
 }
 
 export function buildRows(items: StoredReceiptItem[]) {
-  const rates = getKdvRates(items);
-  const kdvCols = rates.flatMap((r) => [
-    `${rateLabel(r)} Matrah`,
-    `${rateLabel(r)} Tutar`,
-  ]);
+  // Sort by upload time so NO increases by first uploaded, second uploaded, etc.
+  const sorted = [...items].sort((a, b) => a.createdAt - b.createdAt);
 
   const cols = [
-    "id",
-    "created_at",
-    "file_name",
-    "status",
-    "error",
-    "merchant_name",
-    "transaction_date",
-    "transaction_time",
-    "currency",
-    "receipt_number",
-    "payment_method",
-    "card_last4",
-    "tax_office",
-    "tax_no",
-    ...kdvCols,
-    "subtotal",
-    "tax",
-    "tip",
-    "discount",
-    "total",
-    "kdv_json",
-    "line_items_count",
-    "line_items_json",
+    "NO",
+    "FIS NO",
+    "TARİH",
+    "FİRMA ADI",
+    "KDV %1",
+    "KDV %10",
+    "KDV %20",
+    "TOPLAM TUTAR",
+    "Vergi Dairesi",
+    "Vergi No",
   ];
 
-  const rows = items.map((it) => {
+  const rows = sorted.map((it, idx) => {
+    const rec = asRecord(it.receipt);
+    const date = getKey(rec, "TARİH", "TARIH", "transaction_date");
+
     const r: Record<string, unknown> = {
-      id: it.id,
-      created_at: formatIso(it.createdAt),
-      file_name: it.fileName,
-      status: it.status,
-      error: it.error ?? "",
-      merchant_name: pick(it.receipt, "merchant.name"),
-      transaction_date: pick(it.receipt, "transaction.date"),
-      transaction_time: pick(it.receipt, "transaction.time"),
-      currency: pick(it.receipt, "transaction.currency"),
-      receipt_number: pick(it.receipt, "transaction.receipt_number"),
-      payment_method: pick(it.receipt, "transaction.payment_method"),
-      card_last4: pick(it.receipt, "transaction.card_last4"),
-      tax_office: pick(it.receipt, "tax.tax_office"),
-      tax_no: pick(it.receipt, "tax.tax_no"),
-      subtotal: pick(it.receipt, "totals.subtotal"),
-      tax: pick(it.receipt, "totals.tax"),
-      tip: pick(it.receipt, "totals.tip"),
-      discount: pick(it.receipt, "totals.discount"),
-      total: pick(it.receipt, "totals.total"),
-      kdv_json: pick(it.receipt, "tax.kdv"),
-      line_items_count: Array.isArray(pick(it.receipt, "line_items"))
-        ? (pick(it.receipt, "line_items") as unknown[]).length
-        : 0,
-      line_items_json: pick(it.receipt, "line_items"),
+      NO: idx + 1,
+      "FIS NO": getKey(rec, "FİŞ NO", "FIS NO", "FİS NO"),
+      TARİH: normalizeDateDmy(date),
+      "FİRMA ADI": getKey(rec, "FİRMA ADI", "FIRMA ADI", "FİRMA", "FIRMA"),
+      "KDV %1": getKey(rec, "KDV %1", "KDV %01"),
+      "KDV %10": getKey(rec, "KDV %10"),
+      "KDV %20": getKey(rec, "KDV %20"),
+      "TOPLAM TUTAR": getKey(rec, "TOPLAM TUTAR", "TOPLAM", "TOTAL"),
+      "Vergi Dairesi": getKey(rec, "Vergi Dairesi", "VERGİ DAİRESİ"),
+      "Vergi No": getKey(rec, "Vergi No", "VERGİ NO", "VKN", "TCKN"),
     };
 
-    // Fill dynamic KDV columns.
-    const kdv = pick(it.receipt, "tax.kdv");
-    if (Array.isArray(kdv)) {
-      const byRate = new Map<number, { taxable_amount?: unknown; tax_amount?: unknown }>();
-      for (const line of kdv) {
-        const rec = asRecord(line);
-        const rr = normalizeRate(rec?.rate_percent);
-        if (rr === null) continue;
-        const existing = byRate.get(rr) ?? {};
-        // Prefer explicit values; if multiple lines share same rate, keep the first non-empty values.
-        const taxable = rec?.taxable_amount;
-        const taxAmount = rec?.tax_amount;
-        byRate.set(rr, {
-          taxable_amount: existing.taxable_amount ?? taxable,
-          tax_amount: existing.tax_amount ?? taxAmount,
-        });
-      }
-      for (const rate of rates) {
-        const v = byRate.get(rate);
-        r[`${rateLabel(rate)} Matrah`] = v?.taxable_amount;
-        r[`${rateLabel(rate)} Tutar`] = v?.tax_amount;
-      }
-    }
+    // Ensure all columns exist for every row.
+    for (const c of cols) if (!(c in r)) r[c] = "";
     return r;
   });
 
@@ -151,7 +100,8 @@ export function downloadCsv(filename: string, items: StoredReceiptItem[]) {
   const { cols, rows } = buildRows(items);
   const header = cols.join(",");
   const lines = rows.map((r) => cols.map((c) => csvEscape(r[c])).join(","));
-  const csv = [header, ...lines].join("\n");
+  // UTF-8 BOM helps Excel on Windows correctly display Turkish characters.
+  const csv = "\ufeff" + [header, ...lines].join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -163,35 +113,27 @@ export function downloadCsv(filename: string, items: StoredReceiptItem[]) {
   URL.revokeObjectURL(url);
 }
 
-export function downloadExcel(filename: string, items: StoredReceiptItem[]) {
-  // Excel-compatible HTML table (downloads as .xls). This avoids pulling in a full XLSX writer dependency.
+export async function downloadExcel(filename: string, items: StoredReceiptItem[]) {
   const { cols, rows } = buildRows(items);
-  const escapeHtml = (v: unknown) =>
-    String(v ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
 
-  const table =
-    "<table>" +
-    "<thead><tr>" +
-    cols.map((c) => `<th>${escapeHtml(c)}</th>`).join("") +
-    "</tr></thead>" +
-    "<tbody>" +
-    rows
-      .map((r) => `<tr>${cols.map((c) => `<td>${escapeHtml(r[c])}</td>`).join("")}</tr>`)
-      .join("") +
-    "</tbody></table>";
+  // Lazy-load to keep initial bundle smaller.
+  const XLSX = await import("xlsx");
 
-  const html =
-    `<!doctype html><html><head><meta charset="utf-8" /></head><body>` + table + `</body></html>`;
+  // Build an array-of-arrays so column order is exactly `cols`.
+  const aoa: unknown[][] = [cols, ...rows.map((r) => cols.map((c) => r[c] ?? ""))];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Receipts");
 
-  const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+  const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  const blob = new Blob([out], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = filename.endsWith(".xls") ? filename : `${filename}.xls`;
+  a.download = filename.toLowerCase().endsWith(".xlsx") ? filename : `${filename}.xlsx`;
   document.body.appendChild(a);
   a.click();
   a.remove();
