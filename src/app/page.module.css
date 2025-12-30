@@ -111,6 +111,7 @@
   color: var(--text);
   padding: 18px;
   min-height: 260px;
+  align-self: start;
   cursor: pointer;
   display: flex;
   flex-direction: column;

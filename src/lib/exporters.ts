@@ -15,17 +15,55 @@ function formatIso(ts: number): string {
   }
 }
 
-function pick(obj: any, path: string): unknown {
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+}
+
+function pick(obj: unknown, path: string): unknown {
   const parts = path.split(".");
-  let cur: any = obj;
+  let cur: unknown = obj;
   for (const p of parts) {
-    if (cur == null) return undefined;
-    cur = cur[p];
+    const rec = asRecord(cur);
+    if (!rec) return undefined;
+    cur = rec[p];
   }
   return cur;
 }
 
+function normalizeRate(rate: unknown): number | null {
+  if (typeof rate === "number" && Number.isFinite(rate)) return rate;
+  if (typeof rate !== "string") return null;
+  const s = rate.replace(/%/g, "").trim();
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function rateLabel(rate: number): string {
+  const base = Number.isInteger(rate) ? String(rate) : String(rate).replace(".", ",");
+  return `KDV ${base}%`;
+}
+
+function getKdvRates(items: StoredReceiptItem[]): number[] {
+  const set = new Set<number>();
+  for (const it of items) {
+    const kdv = pick(it.receipt, "tax.kdv");
+    if (!Array.isArray(kdv)) continue;
+    for (const line of kdv) {
+      const r = normalizeRate(asRecord(line)?.rate_percent);
+      if (r === null) continue;
+      set.add(r);
+    }
+  }
+  return Array.from(set).sort((a, b) => a - b);
+}
+
 export function buildRows(items: StoredReceiptItem[]) {
+  const rates = getKdvRates(items);
+  const kdvCols = rates.flatMap((r) => [
+    `${rateLabel(r)} Matrah`,
+    `${rateLabel(r)} Tutar`,
+  ]);
+
   const cols = [
     "id",
     "created_at",
@@ -39,17 +77,21 @@ export function buildRows(items: StoredReceiptItem[]) {
     "receipt_number",
     "payment_method",
     "card_last4",
+    "tax_office",
+    "tax_no",
+    ...kdvCols,
     "subtotal",
     "tax",
     "tip",
     "discount",
     "total",
+    "kdv_json",
     "line_items_count",
     "line_items_json",
-  ] as const;
+  ];
 
   const rows = items.map((it) => {
-    const r: Record<(typeof cols)[number], unknown> = {
+    const r: Record<string, unknown> = {
       id: it.id,
       created_at: formatIso(it.createdAt),
       file_name: it.fileName,
@@ -62,16 +104,43 @@ export function buildRows(items: StoredReceiptItem[]) {
       receipt_number: pick(it.receipt, "transaction.receipt_number"),
       payment_method: pick(it.receipt, "transaction.payment_method"),
       card_last4: pick(it.receipt, "transaction.card_last4"),
+      tax_office: pick(it.receipt, "tax.tax_office"),
+      tax_no: pick(it.receipt, "tax.tax_no"),
       subtotal: pick(it.receipt, "totals.subtotal"),
       tax: pick(it.receipt, "totals.tax"),
       tip: pick(it.receipt, "totals.tip"),
       discount: pick(it.receipt, "totals.discount"),
       total: pick(it.receipt, "totals.total"),
+      kdv_json: pick(it.receipt, "tax.kdv"),
       line_items_count: Array.isArray(pick(it.receipt, "line_items"))
         ? (pick(it.receipt, "line_items") as unknown[]).length
         : 0,
       line_items_json: pick(it.receipt, "line_items"),
     };
+
+    // Fill dynamic KDV columns.
+    const kdv = pick(it.receipt, "tax.kdv");
+    if (Array.isArray(kdv)) {
+      const byRate = new Map<number, { taxable_amount?: unknown; tax_amount?: unknown }>();
+      for (const line of kdv) {
+        const rec = asRecord(line);
+        const rr = normalizeRate(rec?.rate_percent);
+        if (rr === null) continue;
+        const existing = byRate.get(rr) ?? {};
+        // Prefer explicit values; if multiple lines share same rate, keep the first non-empty values.
+        const taxable = rec?.taxable_amount;
+        const taxAmount = rec?.tax_amount;
+        byRate.set(rr, {
+          taxable_amount: existing.taxable_amount ?? taxable,
+          tax_amount: existing.tax_amount ?? taxAmount,
+        });
+      }
+      for (const rate of rates) {
+        const v = byRate.get(rate);
+        r[`${rateLabel(rate)} Matrah`] = v?.taxable_amount;
+        r[`${rateLabel(rate)} Tutar`] = v?.tax_amount;
+      }
+    }
     return r;
   });
 

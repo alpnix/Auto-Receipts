@@ -12,6 +12,21 @@ type ApiResp = ApiOk | ApiErr;
 
 type UiItem = StoredReceiptItem & { previewUrl?: string };
 
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+}
+
+function pick(obj: unknown, path: string): unknown {
+  const parts = path.split(".");
+  let cur: unknown = obj;
+  for (const p of parts) {
+    const rec = asRecord(cur);
+    if (!rec) return undefined;
+    cur = rec[p];
+  }
+  return cur;
+}
+
 export default function Home() {
   const [items, setItems] = useState<UiItem[]>([]);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -112,7 +127,6 @@ export default function Home() {
     }
     // Fire sequentially to avoid spiky Bedrock usage; can be parallelized later.
     for (const f of files) {
-      // eslint-disable-next-line no-await-in-loop
       await transcribeOne(f);
     }
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -187,11 +201,11 @@ export default function Home() {
           </button>
 
           {items.map((it) => {
-            const merchant = (it.receipt as any)?.merchant?.name as string | undefined;
-            const total = (it.receipt as any)?.totals?.total as number | undefined;
-            const date = (it.receipt as any)?.transaction?.date as string | undefined;
-            const currency = (it.receipt as any)?.transaction?.currency as string | undefined;
-            const lineItems = (it.receipt as any)?.line_items as unknown[] | undefined;
+            const merchant = pick(it.receipt, "merchant.name");
+            const total = pick(it.receipt, "totals.total");
+            const date = pick(it.receipt, "transaction.date");
+            const currency = pick(it.receipt, "transaction.currency");
+            const lineItems = pick(it.receipt, "line_items");
             const lineCount = Array.isArray(lineItems) ? lineItems.length : 0;
             return (
               <article key={it.id} className={styles.itemCard}>
@@ -233,17 +247,23 @@ export default function Home() {
                 </div>
 
                 <div className={styles.itemBody}>
-                  <div className={styles.itemTitle}>{merchant || it.fileName}</div>
+                  <div className={styles.itemTitle}>
+                    {(typeof merchant === "string" && merchant) || it.fileName}
+                  </div>
                   <div className={styles.itemMeta}>
-                    {date ? <span>{date}</span> : <span>{new Date(it.createdAt).toLocaleString()}</span>}
+                    {typeof date === "string" && date ? (
+                      <span>{date}</span>
+                    ) : (
+                      <span>{new Date(it.createdAt).toLocaleString()}</span>
+                    )}
                     <span>·</span>
                     <span>{(it.size / 1024).toFixed(0)} KB</span>
                     {it.status === "done" ? (
                       <>
                         <span>·</span>
                         <span>
-                          {currency ? `${currency} ` : ""}
-                          {typeof total === "number" ? total.toFixed(2) : "—"}
+                          {typeof currency === "string" && currency ? `${currency} ` : ""}
+                          {typeof total === "number" && Number.isFinite(total) ? total.toFixed(2) : "—"}
                         </span>
                         <span>·</span>
                         <span>{lineCount} items</span>
